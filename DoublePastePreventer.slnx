@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="DoublePastePreventer/DoublePastePreventer.vcxproj" Id="0a85b34a-07a1-484e-b807-d92ab515e9f7" />
+</Solution>

@@ -1,0 +1,270 @@
+// DoublePastePreventer.cpp : Defines the entry point for the application.
+//
+
+#include "framework.h"
+#include <shellapi.h>
+#include <commctrl.h>
+#include "DoublePastePreventer.h"
+#include <string>
+#include <iostream>
+
+#define WM_TRAYICON (WM_USER + 1)
+#define MAX_LOADSTRING 100
+
+constexpr unsigned long blockTimeInMS = 1000;
+constexpr LONG WW = 400, WH = 500;
+
+// Global Variables:
+HINSTANCE hInst;                                // current instance
+HHOOK hHook;
+WCHAR szTitle[MAX_LOADSTRING];                  // The title bar text
+WCHAR szWindowClass[MAX_LOADSTRING];            // the main window class name
+
+// Forward declarations of functions included in this code module:
+ATOM                MyRegisterClass(HINSTANCE hInstance);
+BOOL                InitInstance(HINSTANCE, int);
+LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
+INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
+LRESULT CALLBACK    KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam);
+void                SetTrayIcon(HWND hWnd, bool add);
+
+std::wstring pastedText;
+ULONGLONG lastPasteTime = GetTickCount64();
+
+int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
+                     _In_opt_ HINSTANCE hPrevInstance,
+                     _In_ LPWSTR    lpCmdLine,
+                     _In_ int       nCmdShow)
+{
+    UNREFERENCED_PARAMETER(hPrevInstance);
+    UNREFERENCED_PARAMETER(lpCmdLine);
+
+    // TODO: Place code here.
+
+    // Initialize global strings
+    LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
+    LoadStringW(hInstance, IDC_DOUBLEPASTEPREVENTER, szWindowClass, MAX_LOADSTRING);
+    MyRegisterClass(hInstance);
+
+    // Perform application initialization:
+    if (!InitInstance (hInstance, nCmdShow))
+    {
+        return FALSE;
+    }
+
+    HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_DOUBLEPASTEPREVENTER));
+
+    hHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, hInstance, 0);
+
+    MSG msg;
+
+    // Main message loop:
+    while (GetMessage(&msg, nullptr, 0, 0))
+    {
+        if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
+        {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+    }
+
+    return (int) msg.wParam;
+}
+
+
+
+//
+//  FUNCTION: MyRegisterClass()
+//
+//  PURPOSE: Registers the window class.
+//
+ATOM MyRegisterClass(HINSTANCE hInstance)
+{
+    WNDCLASSEXW wcex;
+
+    wcex.cbSize = sizeof(WNDCLASSEX);
+
+    wcex.style          = CS_HREDRAW | CS_VREDRAW;
+    wcex.lpfnWndProc    = WndProc;
+    wcex.cbClsExtra     = 0;
+    wcex.cbWndExtra     = 0;
+    wcex.hInstance      = hInstance;
+    wcex.hIcon          = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_DOUBLEPASTEPREVENTER));
+    wcex.hCursor        = LoadCursor(nullptr, IDC_ARROW);
+    wcex.hbrBackground  = (HBRUSH)(COLOR_WINDOW+1);
+    wcex.lpszMenuName   = MAKEINTRESOURCEW(IDC_DOUBLEPASTEPREVENTER);
+    wcex.lpszClassName  = szWindowClass;
+    wcex.hIconSm        = LoadIcon(wcex.hInstance, MAKEINTRESOURCE(IDI_SMALL));
+
+    return RegisterClassExW(&wcex);
+}
+
+//
+//   FUNCTION: InitInstance(HINSTANCE, int)
+//
+//   PURPOSE: Saves instance handle and creates main window
+//
+//   COMMENTS:
+//
+//        In this function, we save the instance handle in a global variable and
+//        create and display the main program window.
+//
+BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
+{
+   hInst = hInstance; // Store instance handle in our global variable
+
+   HWND hWnd = CreateWindowW(szWindowClass, szTitle, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+      CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, nullptr, nullptr, hInstance, nullptr);
+
+   if (!hWnd)
+   {
+      return FALSE;
+   }
+
+   POINT pt;
+   GetCursorPos(&pt);
+   HMONITOR mnt = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
+   MONITORINFO mnti;
+   mnti.cbSize = sizeof(MONITORINFO);
+   GetMonitorInfo(mnt, &mnti);
+   int x = (mnti.rcMonitor.right + mnti.rcMonitor.left)/2 - WW / 2, y = (mnti.rcMonitor.bottom + mnti.rcMonitor.top) / 2 - WH / 2;
+   SetWindowPos(hWnd, HWND_TOP, x, y, WW, WH, SWP_SHOWWINDOW);
+
+   //CreateWindow(L"msctls_trackbar32", L"", WS_CHILD | WS_VISIBLE, 10, 10, 200, 30, hWnd, NULL, hInstance, NULL);
+
+   ShowWindow(hWnd, nCmdShow);
+   UpdateWindow(hWnd);
+
+   return TRUE;
+}
+
+//
+//  FUNCTION: WndProc(HWND, UINT, WPARAM, LPARAM)
+//
+//  PURPOSE: Processes messages for the main window.
+//
+//  WM_COMMAND  - process the application menu
+//  WM_PAINT    - Paint the main window
+//  WM_DESTROY  - post a quit message and return
+//
+//
+LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    switch (message)
+    {
+    case WM_COMMAND:
+        {
+            int wmId = LOWORD(wParam);
+            // Parse the menu selections:
+            switch (wmId)
+            {
+            case IDM_ABOUT:
+                DialogBox(hInst, MAKEINTRESOURCE(IDD_ABOUTBOX), hWnd, About);
+                break;
+            case IDM_EXIT:
+                DestroyWindow(hWnd);
+                break;
+            default:
+                return DefWindowProc(hWnd, message, wParam, lParam);
+            }
+        }
+        break;
+    case WM_PAINT:
+        {
+            PAINTSTRUCT ps;
+            BeginPaint(hWnd, &ps);
+            // TODO: Add any drawing code here...
+            EndPaint(hWnd, &ps);
+        }
+        break;
+    case WM_DESTROY:
+        UnhookWindowsHookEx(hHook);
+        PostQuitMessage(0);
+        break;
+    case WM_CLOSE:
+        SetTrayIcon(hWnd, true);
+        ShowWindow(hWnd, SW_HIDE);
+        return 0;
+
+    case WM_TRAYICON:
+        if (lParam == WM_LBUTTONUP) {
+            ShowWindow(hWnd, SW_SHOW);
+            SetForegroundWindow(hWnd);  
+            SetTrayIcon(hWnd, false);
+        }
+        else if (lParam == WM_RBUTTONUP) {
+            HMENU hmenu = CreatePopupMenu();
+            AppendMenuW(hmenu, MF_ENABLED, IDM_EXIT_ITEM, L"Exit");
+            POINT pt;
+            GetCursorPos(&pt);
+            BOOL cmd = TrackPopupMenu(hmenu, TPM_RIGHTALIGN | TPM_TOPALIGN | TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hWnd, NULL);
+            if (cmd == IDM_EXIT_ITEM) {
+                UnhookWindowsHookEx(hHook);
+                PostQuitMessage(0);
+            }
+        }
+        return 0;
+    default:
+        return DefWindowProc(hWnd, message, wParam, lParam);
+    }
+    return 0;
+}
+
+// Message handler for about box.
+INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    UNREFERENCED_PARAMETER(lParam);
+    switch (message)
+    {
+    case WM_INITDIALOG:
+        return (INT_PTR)TRUE;
+
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL)
+        {
+            EndDialog(hDlg, LOWORD(wParam));
+            return (INT_PTR)TRUE;
+        }
+        break;
+    }
+    return (INT_PTR)FALSE;
+}
+
+LRESULT KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
+{
+    if (nCode < 0 || wParam != WM_KEYDOWN) return CallNextHookEx(hHook, nCode, wParam, lParam);
+    bool vKeyDown = (reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam)->vkCode == 0x56), ctrlKeyDown = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    if (!vKeyDown || !ctrlKeyDown) return CallNextHookEx(hHook, nCode, wParam, lParam);
+    bool matchPasted = false;
+    std::wstring currentClip;
+    if(!OpenClipboard(NULL)) return CallNextHookEx(hHook, nCode, wParam, lParam);
+    HANDLE rawData = GetClipboardData(CF_UNICODETEXT);
+    if (rawData == NULL) {
+        CloseClipboard();
+        return CallNextHookEx(hHook, nCode, wParam, lParam);
+    }
+    LPVOID dataPtr = GlobalLock(rawData);
+    if (dataPtr != NULL) {
+        currentClip = std::wstring(static_cast<wchar_t*>(dataPtr));
+        matchPasted = (pastedText == currentClip);
+        GlobalUnlock(rawData);
+    }
+    CloseClipboard();
+    ULONGLONG currentTime = GetTickCount64();
+    if (currentTime - lastPasteTime < blockTimeInMS && matchPasted)  return 1;
+    lastPasteTime = currentTime;
+    pastedText = currentClip;
+    return CallNextHookEx(hHook, nCode, wParam, lParam);
+}
+
+void SetTrayIcon(HWND hWnd, bool add) {
+    NOTIFYICONDATA nid = {};
+    nid.cbSize = sizeof(NOTIFYICONDATA);
+    nid.hWnd = hWnd;
+    nid.uID = 1;
+    nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    nid.uCallbackMessage = WM_TRAYICON;
+    nid.hIcon = LoadIcon(hInst, MAKEINTRESOURCE(IDI_DOUBLEPASTEPREVENTER));
+    wcscpy_s(nid.szTip, szTitle);
+    Shell_NotifyIcon(add ? NIM_ADD : NIM_DELETE, &nid);
+}
