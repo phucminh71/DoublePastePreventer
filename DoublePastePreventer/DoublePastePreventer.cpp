@@ -1,5 +1,6 @@
 // DoublePastePreventer.cpp : Defines the entry point for the application.
 //
+#pragma comment(lib, "comctl32.lib")
 
 #include "framework.h"
 #include <shellapi.h>
@@ -11,12 +12,14 @@
 #define WM_TRAYICON (WM_USER + 1)
 #define MAX_LOADSTRING 100
 
-constexpr unsigned long blockTimeInMS = 1000;
-constexpr LONG WW = 400, WH = 500;
+bool enabled = true;
+unsigned long blockTimeInMS = 1000;
+constexpr unsigned int values[] = { 100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000};
 
 // Global Variables:
 HINSTANCE hInst;                                // current instance
 HHOOK hHook;
+HWND hDlg = NULL;
 WCHAR szTitle[MAX_LOADSTRING];                  // The title bar text
 WCHAR szWindowClass[MAX_LOADSTRING];            // the main window class name
 
@@ -26,6 +29,7 @@ BOOL                InitInstance(HINSTANCE, int);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
 LRESULT CALLBACK    KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam);
+INT_PTR CALLBACK    SettingsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 void                SetTrayIcon(HWND hWnd, bool add);
 
 std::wstring pastedText;
@@ -54,13 +58,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
     HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_DOUBLEPASTEPREVENTER));
 
-    hHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, hInstance, 0);
-
     MSG msg;
 
     // Main message loop:
     while (GetMessage(&msg, nullptr, 0, 0))
     {
+        if (hDlg && IsDialogMessage(hDlg, &msg))
+            continue;
         if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
         {
             TranslateMessage(&msg);
@@ -111,31 +115,41 @@ ATOM MyRegisterClass(HINSTANCE hInstance)
 //
 BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 {
-   hInst = hInstance; // Store instance handle in our global variable
+    hInst = hInstance;
 
-   HWND hWnd = CreateWindowW(szWindowClass, szTitle, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-      CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, nullptr, nullptr, hInstance, nullptr);
+    INITCOMMONCONTROLSEX icex;
+    icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
+    icex.dwICC = ICC_BAR_CLASSES;
+    InitCommonControlsEx(&icex);
 
-   if (!hWnd)
-   {
-      return FALSE;
-   }
+    HWND hWnd = CreateWindowW(szWindowClass, szTitle, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+        CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, nullptr, nullptr, hInstance, nullptr);
 
-   POINT pt;
-   GetCursorPos(&pt);
-   HMONITOR mnt = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
-   MONITORINFO mnti;
-   mnti.cbSize = sizeof(MONITORINFO);
-   GetMonitorInfo(mnt, &mnti);
-   int x = (mnti.rcMonitor.right + mnti.rcMonitor.left)/2 - WW / 2, y = (mnti.rcMonitor.bottom + mnti.rcMonitor.top) / 2 - WH / 2;
-   SetWindowPos(hWnd, HWND_TOP, x, y, WW, WH, SWP_SHOWWINDOW);
+    if (!hWnd) return FALSE;
 
-   //CreateWindow(L"msctls_trackbar32", L"", WS_CHILD | WS_VISIBLE, 10, 10, 200, 30, hWnd, NULL, hInstance, NULL);
+    hDlg = CreateDialogW(hInst, MAKEINTRESOURCEW(IDD_FORMVIEW), hWnd, SettingsProc);
 
-   ShowWindow(hWnd, nCmdShow);
-   UpdateWindow(hWnd);
+    RECT r;
+    GetWindowRect(hDlg, &r);
+    AdjustWindowRect(&r, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, TRUE);
+    int w = r.right - r.left, h = r.bottom - r.top;
 
-   return TRUE;
+    POINT pt;
+    GetCursorPos(&pt);
+    HMONITOR mnt = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
+    MONITORINFO mnti;
+    mnti.cbSize = sizeof(MONITORINFO);
+    GetMonitorInfo(mnt, &mnti);
+    int x = (mnti.rcMonitor.right + mnti.rcMonitor.left) / 2 - w / 2;
+    int y = (mnti.rcMonitor.bottom + mnti.rcMonitor.top) / 2 - h / 2;
+    SetWindowPos(hWnd, HWND_TOP, x, y, w, h, SWP_SHOWWINDOW);
+
+    hHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, hInstance, 0);
+
+    ShowWindow(hWnd, nCmdShow);
+    UpdateWindow(hWnd);
+
+    return TRUE;
 }
 
 //
@@ -179,13 +193,18 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         break;
     case WM_DESTROY:
         UnhookWindowsHookEx(hHook);
+        DestroyWindow(hDlg);
         PostQuitMessage(0);
         break;
     case WM_CLOSE:
-        SetTrayIcon(hWnd, true);
-        ShowWindow(hWnd, SW_HIDE);
+        DestroyWindow(hWnd);
         return 0;
-
+    case WM_SIZE:
+        if (wParam == SIZE_MINIMIZED) {
+            SetTrayIcon(hWnd, true);
+            ShowWindow(hWnd, SW_HIDE);
+        }
+        return 0;
     case WM_TRAYICON:
         if (lParam == WM_LBUTTONUP) {
             ShowWindow(hWnd, SW_SHOW);
@@ -193,15 +212,21 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             SetTrayIcon(hWnd, false);
         }
         else if (lParam == WM_RBUTTONUP) {
-            HMENU hmenu = CreatePopupMenu();
-            AppendMenuW(hmenu, MF_ENABLED, IDM_EXIT_ITEM, L"Exit");
+            HMENU hMenu = CreatePopupMenu();
+            AppendMenuW(hMenu, MF_ENABLED, IDM_TOGGLE_ITEM, (enabled ? L"Disable" : L"Enable"));
+            AppendMenuW(hMenu, MF_ENABLED, IDM_EXIT_ITEM, L"Exit");
             POINT pt;
             GetCursorPos(&pt);
-            BOOL cmd = TrackPopupMenu(hmenu, TPM_RIGHTALIGN | TPM_TOPALIGN | TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hWnd, NULL);
+            BOOL cmd = TrackPopupMenu(hMenu, TPM_RIGHTALIGN | TPM_TOPALIGN | TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hWnd, NULL);
             if (cmd == IDM_EXIT_ITEM) {
                 UnhookWindowsHookEx(hHook);
+                DestroyWindow(hDlg);
                 PostQuitMessage(0);
             }
+            else if (cmd == IDM_TOGGLE_ITEM) {
+                enabled = !enabled;
+            }
+            DestroyMenu(hMenu);
         }
         return 0;
     default:
@@ -232,7 +257,7 @@ INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 
 LRESULT KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 {
-    if (nCode < 0 || wParam != WM_KEYDOWN) return CallNextHookEx(hHook, nCode, wParam, lParam);
+    if (nCode < 0 || wParam != WM_KEYDOWN || !enabled) return CallNextHookEx(hHook, nCode, wParam, lParam);
     bool vKeyDown = (reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam)->vkCode == 0x56), ctrlKeyDown = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
     if (!vKeyDown || !ctrlKeyDown) return CallNextHookEx(hHook, nCode, wParam, lParam);
     bool matchPasted = false;
@@ -255,6 +280,40 @@ LRESULT KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
     lastPasteTime = currentTime;
     pastedText = currentClip;
     return CallNextHookEx(hHook, nCode, wParam, lParam);
+}
+
+INT_PTR CALLBACK SettingsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    int index;
+    switch (uMsg) {
+    case WM_INITDIALOG:
+        SendDlgItemMessageW(hWnd, IDC_SLIDER1, TBM_SETRANGE, TRUE, MAKELPARAM(0, sizeof(values) / sizeof(values[0]) - 1));
+        SendDlgItemMessageW(hWnd, IDC_SLIDER1, TBM_SETTICFREQ, 1, 0);
+        SendDlgItemMessageW(hWnd, IDC_SLIDER1, TBM_SETPOS, TRUE, 4);
+        SetDlgItemInt(hWnd, IDC_EDIT1, values[4], false);
+        break;
+    case WM_HSCROLL:
+        index = SendDlgItemMessageW(hWnd, IDC_SLIDER1, TBM_GETPOS, 0, 0);
+        SetDlgItemInt(hWnd, IDC_EDIT1, values[index], false);
+        break;
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDC_EDIT1 && HIWORD(wParam) == EN_CHANGE) {
+            UINT newV = GetDlgItemInt(hWnd, IDC_EDIT1, NULL, FALSE);
+            int lo = 0, hi = sizeof(values) / sizeof(values[0]) - 1;
+            while (lo < hi) {
+                int mid = (lo + hi) / 2;
+                if (values[mid] == newV) { lo = mid; break; }
+                if (values[mid] < newV) lo = mid + 1;
+                else hi = mid;
+            }
+            if (lo > 0 && abs((int)values[lo] - (int)newV) > abs((int)values[lo - 1] - (int)newV))
+                lo--;
+            SendDlgItemMessage(hWnd, IDC_SLIDER1, TBM_SETPOS, TRUE, lo);    
+        }else if (LOWORD(wParam) == IDC_BUTTON1 && HIWORD(wParam) == BN_CLICKED){
+            blockTimeInMS = GetDlgItemInt(hWnd, IDC_EDIT1, NULL, FALSE);
+        }
+    }
+    return FALSE;
 }
 
 void SetTrayIcon(HWND hWnd, bool add) {
