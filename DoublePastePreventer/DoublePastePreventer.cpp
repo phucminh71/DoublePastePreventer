@@ -255,30 +255,32 @@ INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
     return (INT_PTR)FALSE;
 }
 
-LRESULT KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
+LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 {
     if (nCode < 0 || wParam != WM_KEYDOWN || !enabled) return CallNextHookEx(hHook, nCode, wParam, lParam);
     bool vKeyDown = (reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam)->vkCode == 0x56), ctrlKeyDown = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
     if (!vKeyDown || !ctrlKeyDown) return CallNextHookEx(hHook, nCode, wParam, lParam);
+    if(!OpenClipboard(NULL)) return CallNextHookEx(hHook, nCode, wParam, lParam);
     bool matchPasted = false;
     std::wstring currentClip;
-    if(!OpenClipboard(NULL)) return CallNextHookEx(hHook, nCode, wParam, lParam);
     HANDLE rawData = GetClipboardData(CF_UNICODETEXT);
     if (rawData == NULL) {
         CloseClipboard();
         return CallNextHookEx(hHook, nCode, wParam, lParam);
     }
     LPVOID dataPtr = GlobalLock(rawData);
+    ULONGLONG currentTime = GetTickCount64();
     if (dataPtr != NULL) {
-        currentClip = std::wstring(static_cast<wchar_t*>(dataPtr));
-        matchPasted = (pastedText == currentClip);
+        const wchar_t* raw = static_cast<const wchar_t*>(dataPtr);
+        matchPasted = (wcscmp(pastedText.c_str(), raw) == 0);
+        if (!matchPasted || currentTime - lastPasteTime >= blockTimeInMS)
+            currentClip = raw;
         GlobalUnlock(rawData);
     }
     CloseClipboard();
-    ULONGLONG currentTime = GetTickCount64();
     if (currentTime - lastPasteTime < blockTimeInMS && matchPasted)  return 1;
     lastPasteTime = currentTime;
-    pastedText = currentClip;
+    if(!currentClip.empty()) pastedText = currentClip;
     return CallNextHookEx(hHook, nCode, wParam, lParam);
 }
 
