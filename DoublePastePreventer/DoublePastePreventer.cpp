@@ -7,13 +7,12 @@
 #include <commctrl.h>
 #include "DoublePastePreventer.h"
 #include <string>
-#include <iostream>
 
 #define WM_TRAYICON (WM_USER + 1)
 #define MAX_LOADSTRING 100
 
 bool enabled = true;
-unsigned long blockTimeInMS = 1000;
+UINT blockTimeInMS = 1000;
 constexpr unsigned int values[] = { 100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000};
 
 // Global Variables:
@@ -207,9 +206,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
     case WM_TRAYICON:
         if (lParam == WM_LBUTTONUP) {
-            ShowWindow(hWnd, SW_SHOW);
+            ShowWindow(hWnd, SW_RESTORE);
+            UpdateWindow(hWnd);
             SetForegroundWindow(hWnd);  
             SetTrayIcon(hWnd, false);
+            SendDlgItemMessageW(hDlg, IDC_CHECK1, BM_SETCHECK, (enabled ? BST_CHECKED : BST_UNCHECKED), 0);
         }
         else if (lParam == WM_RBUTTONUP) {
             HMENU hMenu = CreatePopupMenu();
@@ -279,7 +280,7 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
     }
     CloseClipboard();
     if (currentTime - lastPasteTime < blockTimeInMS && matchPasted)  return 1;
-    lastPasteTime = currentTime;
+    if (dataPtr != NULL) lastPasteTime = currentTime;
     if(!currentClip.empty()) pastedText = currentClip;
     return CallNextHookEx(hHook, nCode, wParam, lParam);
 }
@@ -292,6 +293,7 @@ INT_PTR CALLBACK SettingsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
         SendDlgItemMessageW(hWnd, IDC_SLIDER1, TBM_SETRANGE, TRUE, MAKELPARAM(0, sizeof(values) / sizeof(values[0]) - 1));
         SendDlgItemMessageW(hWnd, IDC_SLIDER1, TBM_SETTICFREQ, 1, 0);
         SendDlgItemMessageW(hWnd, IDC_SLIDER1, TBM_SETPOS, TRUE, 4);
+        SendDlgItemMessageW(hWnd, IDC_CHECK1, BM_SETCHECK, BST_CHECKED, 0);
         SetDlgItemInt(hWnd, IDC_EDIT1, values[4], false);
         break;
     case WM_HSCROLL:
@@ -301,6 +303,11 @@ INT_PTR CALLBACK SettingsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     case WM_COMMAND:
         if (LOWORD(wParam) == IDC_EDIT1 && HIWORD(wParam) == EN_CHANGE) {
             UINT newV = GetDlgItemInt(hWnd, IDC_EDIT1, NULL, FALSE);
+            if (newV < 50 || newV > 10000) {
+                if (newV < 50) newV = 50;
+                else if (newV > 10000) newV = 10000;
+                SetDlgItemInt(hWnd, IDC_EDIT1, newV, false);
+            }
             int lo = 0, hi = sizeof(values) / sizeof(values[0]) - 1;
             while (lo < hi) {
                 int mid = (lo + hi) / 2;
@@ -313,6 +320,9 @@ INT_PTR CALLBACK SettingsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
             SendDlgItemMessage(hWnd, IDC_SLIDER1, TBM_SETPOS, TRUE, lo);    
         }else if (LOWORD(wParam) == IDC_BUTTON1 && HIWORD(wParam) == BN_CLICKED){
             blockTimeInMS = GetDlgItemInt(hWnd, IDC_EDIT1, NULL, FALSE);
+        }
+        else if (LOWORD(wParam) == IDC_CHECK1 && HIWORD(wParam) == BN_CLICKED) {
+            enabled = (IsDlgButtonChecked(hWnd, IDC_CHECK1) == BST_CHECKED);
         }
     }
     return FALSE;
