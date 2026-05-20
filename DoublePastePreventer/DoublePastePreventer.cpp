@@ -10,14 +10,21 @@
 
 #define WM_TRAYICON (WM_USER + 1)
 #define MAX_LOADSTRING 100
+#define REG_DIR L"Software\\DoublePastePreventer"
+#define ENABLED_REG_NAME L"Enabled"
+#define DIALOG_ON_STARTUP_REG_NAME L"Dialog on startup"
+#define BLOCK_TIME_REG_NAME L"Block time"
 
-bool enabled = true;
+bool enabled = true, dialogOnStartup = false;
 UINT blockTimeInMS = 1000;
 constexpr unsigned int values[] = { 100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000};
+int x, y, w, h;
 
 // Global Variables:
 HINSTANCE hInst;                                // current instance
 HHOOK hHook;
+HKEY hKey;
+HWND hButton;
 HWND hDlg = NULL;
 WCHAR szTitle[MAX_LOADSTRING];                  // The title bar text
 WCHAR szWindowClass[MAX_LOADSTRING];            // the main window class name
@@ -49,6 +56,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     LoadStringW(hInstance, IDC_DOUBLEPASTEPREVENTER, szWindowClass, MAX_LOADSTRING);
     MyRegisterClass(hInstance);
 
+    RegCreateKeyExW(HKEY_CURRENT_USER, REG_DIR, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &hKey, NULL);
     // Perform application initialization:
     if (!InitInstance (hInstance, nCmdShow))
     {
@@ -126,12 +134,20 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
     if (!hWnd) return FALSE;
 
+    DWORD size = sizeof(DWORD);
+    RegGetValueW(HKEY_CURRENT_USER, REG_DIR, BLOCK_TIME_REG_NAME, RRF_RT_REG_DWORD, NULL, &blockTimeInMS, &size);
+    DWORD dEnabled = 1, dDialogOnStartup = 0;
+    RegGetValueW(HKEY_CURRENT_USER, REG_DIR, ENABLED_REG_NAME, RRF_RT_REG_DWORD, NULL, &dEnabled, &size);
+    RegGetValueW(HKEY_CURRENT_USER, REG_DIR, DIALOG_ON_STARTUP_REG_NAME, RRF_RT_REG_DWORD, NULL, &dDialogOnStartup, &size);
+    enabled = (bool)(dEnabled != 0);
+    dialogOnStartup = (bool)(dDialogOnStartup != 0);
+
     hDlg = CreateDialogW(hInst, MAKEINTRESOURCEW(IDD_FORMVIEW), hWnd, SettingsProc);
 
     RECT r;
     GetWindowRect(hDlg, &r);
     AdjustWindowRect(&r, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, TRUE);
-    int w = r.right - r.left, h = r.bottom - r.top;
+    w = r.right - r.left, h = r.bottom - r.top;
 
     POINT pt;
     GetCursorPos(&pt);
@@ -139,13 +155,19 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
     MONITORINFO mnti;
     mnti.cbSize = sizeof(MONITORINFO);
     GetMonitorInfo(mnt, &mnti);
-    int x = (mnti.rcMonitor.right + mnti.rcMonitor.left) / 2 - w / 2;
-    int y = (mnti.rcMonitor.bottom + mnti.rcMonitor.top) / 2 - h / 2;
-    SetWindowPos(hWnd, HWND_TOP, x, y, w, h, SWP_SHOWWINDOW);
+    x = (mnti.rcMonitor.right + mnti.rcMonitor.left) / 2 - w / 2;
+    y = (mnti.rcMonitor.bottom + mnti.rcMonitor.top) / 2 - h / 2;
 
     hHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, hInstance, 0);
 
-    ShowWindow(hWnd, nCmdShow);
+    if (dialogOnStartup) {
+        SetWindowPos(hWnd, HWND_TOP, x, y, w, h, SWP_SHOWWINDOW);
+        ShowWindow(hWnd, nCmdShow);
+    }
+    else {
+        SetTrayIcon(hWnd, true);
+        ShowWindow(hWnd, SW_HIDE);
+    }
     UpdateWindow(hWnd);
 
     return TRUE;
@@ -193,6 +215,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_DESTROY:
         UnhookWindowsHookEx(hHook);
         DestroyWindow(hDlg);
+        RegCloseKey(hKey);
         PostQuitMessage(0);
         break;
     case WM_CLOSE:
@@ -206,6 +229,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
     case WM_TRAYICON:
         if (lParam == WM_LBUTTONUP) {
+            SetWindowPos(hWnd, HWND_TOP, x, y, w, h, SWP_SHOWWINDOW);
             ShowWindow(hWnd, SW_RESTORE);
             UpdateWindow(hWnd);
             SetForegroundWindow(hWnd);  
@@ -292,9 +316,23 @@ INT_PTR CALLBACK SettingsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     case WM_INITDIALOG:
         SendDlgItemMessageW(hWnd, IDC_SLIDER1, TBM_SETRANGE, TRUE, MAKELPARAM(0, sizeof(values) / sizeof(values[0]) - 1));
         SendDlgItemMessageW(hWnd, IDC_SLIDER1, TBM_SETTICFREQ, 1, 0);
-        SendDlgItemMessageW(hWnd, IDC_SLIDER1, TBM_SETPOS, TRUE, 4);
-        SendDlgItemMessageW(hWnd, IDC_CHECK1, BM_SETCHECK, BST_CHECKED, 0);
-        SetDlgItemInt(hWnd, IDC_EDIT1, values[4], false);
+        SendDlgItemMessageW(hWnd, IDC_SLIDER1, TBM_SETPAGESIZE, 0, 1);
+        hButton = GetDlgItem(hWnd, IDC_BUTTON1);
+        if(enabled) SendDlgItemMessageW(hWnd, IDC_CHECK1, BM_SETCHECK, BST_CHECKED, 0);
+        if(dialogOnStartup) SendDlgItemMessageW(hWnd, IDC_CHECK2, BM_SETCHECK, BST_CHECKED, 0);
+        SetDlgItemInt(hWnd, IDC_EDIT1, blockTimeInMS, false);
+        {
+            int lo = 0, hi = sizeof(values) / sizeof(values[0]) - 1;
+            while (lo < hi) {
+                int mid = (lo + hi) / 2;
+                if (values[mid] == blockTimeInMS) { lo = mid; break; }
+                if (values[mid] < blockTimeInMS) lo = mid + 1;
+                else hi = mid;
+            }
+            if (lo > 0 && abs((int)values[lo] - (int)blockTimeInMS) > abs((int)values[lo - 1] - (int)blockTimeInMS)) lo--;
+            SendDlgItemMessageW(hWnd, IDC_SLIDER1, TBM_SETPOS, TRUE, lo);
+        }
+        EnableWindow(hButton, FALSE);
         break;
     case WM_HSCROLL:
         index = SendDlgItemMessageW(hWnd, IDC_SLIDER1, TBM_GETPOS, 0, 0);
@@ -308,21 +346,34 @@ INT_PTR CALLBACK SettingsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                 else if (newV > 10000) newV = 10000;
                 SetDlgItemInt(hWnd, IDC_EDIT1, newV, false);
             }
-            int lo = 0, hi = sizeof(values) / sizeof(values[0]) - 1;
-            while (lo < hi) {
-                int mid = (lo + hi) / 2;
-                if (values[mid] == newV) { lo = mid; break; }
-                if (values[mid] < newV) lo = mid + 1;
-                else hi = mid;
+            {
+                int lo = 0, hi = sizeof(values) / sizeof(values[0]) - 1;
+                while (lo < hi) {
+                    int mid = (lo + hi) / 2;
+                    if (values[mid] == newV) { lo = mid; break; }
+                    if (values[mid] < newV) lo = mid + 1;
+                    else hi = mid;
+                }
+                if (lo > 0 && abs((int)values[lo] - (int)newV) > abs((int)values[lo - 1] - (int)newV))
+                    lo--;
+                SendDlgItemMessageW(hWnd, IDC_SLIDER1, TBM_SETPOS, TRUE, lo);
+                EnableWindow(hButton, TRUE);
             }
-            if (lo > 0 && abs((int)values[lo] - (int)newV) > abs((int)values[lo - 1] - (int)newV))
-                lo--;
-            SendDlgItemMessage(hWnd, IDC_SLIDER1, TBM_SETPOS, TRUE, lo);    
         }else if (LOWORD(wParam) == IDC_BUTTON1 && HIWORD(wParam) == BN_CLICKED){
             blockTimeInMS = GetDlgItemInt(hWnd, IDC_EDIT1, NULL, FALSE);
+            DWORD dEnabled = (enabled ? 1 : 0), dDialogOnStartup = (dialogOnStartup ? 1 : 0);
+            RegSetValueExW(hKey, ENABLED_REG_NAME, 0, REG_DWORD, (const BYTE*)(&dEnabled), sizeof(DWORD));
+            RegSetValueExW(hKey, DIALOG_ON_STARTUP_REG_NAME, 0, REG_DWORD, (const BYTE*)(&dDialogOnStartup), sizeof(DWORD));
+            RegSetValueExW(hKey, BLOCK_TIME_REG_NAME, 0, REG_DWORD, (const BYTE*)(&blockTimeInMS), sizeof(DWORD));
+            EnableWindow(hButton, FALSE);
         }
         else if (LOWORD(wParam) == IDC_CHECK1 && HIWORD(wParam) == BN_CLICKED) {
             enabled = (IsDlgButtonChecked(hWnd, IDC_CHECK1) == BST_CHECKED);
+            EnableWindow(hButton, TRUE);
+        }
+        else if (LOWORD(wParam) == IDC_CHECK2 && HIWORD(wParam) == BN_CLICKED) {
+            dialogOnStartup = (IsDlgButtonChecked(hWnd, IDC_CHECK2) == BST_CHECKED);
+            EnableWindow(hButton, TRUE);
         }
     }
     return FALSE;
