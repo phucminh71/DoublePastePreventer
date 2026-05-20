@@ -11,11 +11,13 @@
 #define WM_TRAYICON (WM_USER + 1)
 #define MAX_LOADSTRING 100
 #define REG_DIR L"Software\\DoublePastePreventer"
+#define STARTUP_DIR L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
 #define ENABLED_REG_NAME L"Enabled"
 #define DIALOG_ON_STARTUP_REG_NAME L"Dialog on startup"
+#define STARTUP_REG_NAME L"Run on startup"
 #define BLOCK_TIME_REG_NAME L"Block time"
 
-bool enabled = true, dialogOnStartup = false;
+bool enabled = true, dialogOnStartup = false, runOnStartup = true;
 UINT blockTimeInMS = 1000;
 constexpr unsigned int values[] = { 100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000};
 int x, y, w, h;
@@ -28,6 +30,7 @@ HWND hButton;
 HWND hDlg = NULL;
 WCHAR szTitle[MAX_LOADSTRING];                  // The title bar text
 WCHAR szWindowClass[MAX_LOADSTRING];            // the main window class name
+WCHAR exePath[MAX_PATH];
 
 // Forward declarations of functions included in this code module:
 ATOM                MyRegisterClass(HINSTANCE hInstance);
@@ -134,13 +137,17 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
     if (!hWnd) return FALSE;
 
+    GetModuleFileNameW(NULL, exePath, MAX_PATH);
+
     DWORD size = sizeof(DWORD);
     RegGetValueW(HKEY_CURRENT_USER, REG_DIR, BLOCK_TIME_REG_NAME, RRF_RT_REG_DWORD, NULL, &blockTimeInMS, &size);
-    DWORD dEnabled = 1, dDialogOnStartup = 0;
+    DWORD dEnabled = 1, dDialogOnStartup = 0, dRunOnStartup = 1;
     RegGetValueW(HKEY_CURRENT_USER, REG_DIR, ENABLED_REG_NAME, RRF_RT_REG_DWORD, NULL, &dEnabled, &size);
     RegGetValueW(HKEY_CURRENT_USER, REG_DIR, DIALOG_ON_STARTUP_REG_NAME, RRF_RT_REG_DWORD, NULL, &dDialogOnStartup, &size);
+    RegGetValueW(HKEY_CURRENT_USER, REG_DIR, STARTUP_REG_NAME, RRF_RT_REG_DWORD, NULL, &dRunOnStartup, &size);
     enabled = (bool)(dEnabled != 0);
     dialogOnStartup = (bool)(dDialogOnStartup != 0);
+    runOnStartup = (bool)(dRunOnStartup != 0);
 
     hDlg = CreateDialogW(hInst, MAKEINTRESOURCEW(IDD_FORMVIEW), hWnd, SettingsProc);
 
@@ -308,7 +315,18 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
     if(!currentClip.empty()) pastedText = currentClip;
     return CallNextHookEx(hHook, nCode, wParam, lParam);
 }
-
+int FindNearestValueIndex(unsigned int target) {
+    int lo = 0, hi = sizeof(values) / sizeof(values[0]) - 1;
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        if (values[mid] == target) return mid;
+        if (values[mid] < target) lo = mid + 1;
+        else hi = mid;
+    }
+    if (lo > 0 && abs((int)values[lo] - (int)target) > abs((int)values[lo - 1] - (int)target))
+        lo--;
+    return lo;
+}
 INT_PTR CALLBACK SettingsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
     int index;
@@ -320,18 +338,9 @@ INT_PTR CALLBACK SettingsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
         hButton = GetDlgItem(hWnd, IDC_BUTTON1);
         if(enabled) SendDlgItemMessageW(hWnd, IDC_CHECK1, BM_SETCHECK, BST_CHECKED, 0);
         if(dialogOnStartup) SendDlgItemMessageW(hWnd, IDC_CHECK2, BM_SETCHECK, BST_CHECKED, 0);
+        if(runOnStartup) SendDlgItemMessageW(hWnd, IDC_CHECK3, BM_SETCHECK, BST_CHECKED, 0);
         SetDlgItemInt(hWnd, IDC_EDIT1, blockTimeInMS, false);
-        {
-            int lo = 0, hi = sizeof(values) / sizeof(values[0]) - 1;
-            while (lo < hi) {
-                int mid = (lo + hi) / 2;
-                if (values[mid] == blockTimeInMS) { lo = mid; break; }
-                if (values[mid] < blockTimeInMS) lo = mid + 1;
-                else hi = mid;
-            }
-            if (lo > 0 && abs((int)values[lo] - (int)blockTimeInMS) > abs((int)values[lo - 1] - (int)blockTimeInMS)) lo--;
-            SendDlgItemMessageW(hWnd, IDC_SLIDER1, TBM_SETPOS, TRUE, lo);
-        }
+        SendDlgItemMessageW(hWnd, IDC_SLIDER1, TBM_SETPOS, TRUE, FindNearestValueIndex(blockTimeInMS));
         EnableWindow(hButton, FALSE);
         break;
     case WM_HSCROLL:
@@ -346,25 +355,22 @@ INT_PTR CALLBACK SettingsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                 else if (newV > 10000) newV = 10000;
                 SetDlgItemInt(hWnd, IDC_EDIT1, newV, false);
             }
-            {
-                int lo = 0, hi = sizeof(values) / sizeof(values[0]) - 1;
-                while (lo < hi) {
-                    int mid = (lo + hi) / 2;
-                    if (values[mid] == newV) { lo = mid; break; }
-                    if (values[mid] < newV) lo = mid + 1;
-                    else hi = mid;
-                }
-                if (lo > 0 && abs((int)values[lo] - (int)newV) > abs((int)values[lo - 1] - (int)newV))
-                    lo--;
-                SendDlgItemMessageW(hWnd, IDC_SLIDER1, TBM_SETPOS, TRUE, lo);
-                EnableWindow(hButton, TRUE);
-            }
+            SendDlgItemMessageW(hWnd, IDC_SLIDER1, TBM_SETPOS, TRUE, FindNearestValueIndex(newV));
+            EnableWindow(hButton, TRUE);
         }else if (LOWORD(wParam) == IDC_BUTTON1 && HIWORD(wParam) == BN_CLICKED){
+            HKEY hStartupKey;
             blockTimeInMS = GetDlgItemInt(hWnd, IDC_EDIT1, NULL, FALSE);
-            DWORD dEnabled = (enabled ? 1 : 0), dDialogOnStartup = (dialogOnStartup ? 1 : 0);
+            DWORD dEnabled = (enabled ? 1 : 0), dDialogOnStartup = (dialogOnStartup ? 1 : 0), dRunOnStartup = (runOnStartup ? 1 : 0);
             RegSetValueExW(hKey, ENABLED_REG_NAME, 0, REG_DWORD, (const BYTE*)(&dEnabled), sizeof(DWORD));
             RegSetValueExW(hKey, DIALOG_ON_STARTUP_REG_NAME, 0, REG_DWORD, (const BYTE*)(&dDialogOnStartup), sizeof(DWORD));
+            RegSetValueExW(hKey, STARTUP_REG_NAME, 0, REG_DWORD, (const BYTE*)(&dRunOnStartup), sizeof(DWORD));
             RegSetValueExW(hKey, BLOCK_TIME_REG_NAME, 0, REG_DWORD, (const BYTE*)(&blockTimeInMS), sizeof(DWORD));
+            RegOpenKeyExW(HKEY_CURRENT_USER, STARTUP_DIR, 0, KEY_SET_VALUE, &hStartupKey);
+            if (runOnStartup)
+                RegSetValueExW(hStartupKey, L"DoublePastePreventer", 0, REG_SZ, (const BYTE*)exePath, (wcslen(exePath) + 1) * sizeof(WCHAR));
+            else
+                RegDeleteValueW(hStartupKey, L"DoublePastePreventer");
+            RegCloseKey(hStartupKey);
             EnableWindow(hButton, FALSE);
         }
         else if (LOWORD(wParam) == IDC_CHECK1 && HIWORD(wParam) == BN_CLICKED) {
@@ -373,6 +379,10 @@ INT_PTR CALLBACK SettingsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
         }
         else if (LOWORD(wParam) == IDC_CHECK2 && HIWORD(wParam) == BN_CLICKED) {
             dialogOnStartup = (IsDlgButtonChecked(hWnd, IDC_CHECK2) == BST_CHECKED);
+            EnableWindow(hButton, TRUE);
+        }
+        else if (LOWORD(wParam) == IDC_CHECK3 && HIWORD(wParam) == BN_CLICKED) {
+            runOnStartup = (IsDlgButtonChecked(hWnd, IDC_CHECK3) == BST_CHECKED);
             EnableWindow(hButton, TRUE);
         }
     }
