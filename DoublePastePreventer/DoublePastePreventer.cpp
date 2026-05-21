@@ -15,14 +15,16 @@
 #define ENABLED_REG_NAME L"Enabled"
 #define DIALOG_ON_STARTUP_REG_NAME L"Dialog on startup"
 #define STARTUP_REG_NAME L"Run on startup"
+#define NOTIF_REG_NAME L"Show notification when block"
 #define BLOCK_TIME_REG_NAME L"Block time"
 
-bool enabled = true, dialogOnStartup = false, runOnStartup = true;
+bool enabled = true, dialogOnStartup = false, runOnStartup = true, notif = false;
 UINT blockTimeInMS = 1000;
 constexpr unsigned int values[] = { 100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000};
 int x, y, w, h;
 
 // Global Variables:
+NOTIFYICONDATA notifIconData;
 HINSTANCE hInst;                                // current instance
 HHOOK hHook;
 HKEY hKey;
@@ -40,6 +42,8 @@ INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
 LRESULT CALLBACK    KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam);
 INT_PTR CALLBACK    SettingsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 void                SetTrayIcon(HWND hWnd, bool add);
+void                HideTrayIcon(HWND hWnd);
+void                ShowTrayIcon(HWND hWnd);
 
 std::wstring pastedText;
 ULONGLONG lastPasteTime = GetTickCount64();
@@ -141,13 +145,15 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
     DWORD size = sizeof(DWORD);
     RegGetValueW(HKEY_CURRENT_USER, REG_DIR, BLOCK_TIME_REG_NAME, RRF_RT_REG_DWORD, NULL, &blockTimeInMS, &size);
-    DWORD dEnabled = 1, dDialogOnStartup = 0, dRunOnStartup = 1;
+    DWORD dEnabled = 1, dDialogOnStartup = 0, dRunOnStartup = 1, dNotif = 1;
     RegGetValueW(HKEY_CURRENT_USER, REG_DIR, ENABLED_REG_NAME, RRF_RT_REG_DWORD, NULL, &dEnabled, &size);
     RegGetValueW(HKEY_CURRENT_USER, REG_DIR, DIALOG_ON_STARTUP_REG_NAME, RRF_RT_REG_DWORD, NULL, &dDialogOnStartup, &size);
     RegGetValueW(HKEY_CURRENT_USER, REG_DIR, STARTUP_REG_NAME, RRF_RT_REG_DWORD, NULL, &dRunOnStartup, &size);
+    RegGetValueW(HKEY_CURRENT_USER, REG_DIR, NOTIF_REG_NAME, RRF_RT_REG_DWORD, NULL, &dNotif, &size);
     enabled = (bool)(dEnabled != 0);
     dialogOnStartup = (bool)(dDialogOnStartup != 0);
     runOnStartup = (bool)(dRunOnStartup != 0);
+    notif = (bool)(dNotif != 0);
 
     hDlg = CreateDialogW(hInst, MAKEINTRESOURCEW(IDD_FORMVIEW), hWnd, SettingsProc);
 
@@ -167,15 +173,25 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
     hHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, hInstance, 0);
 
+    SetTrayIcon(hWnd, true);
     if (dialogOnStartup) {
         SetWindowPos(hWnd, HWND_TOP, x, y, w, h, SWP_SHOWWINDOW);
         ShowWindow(hWnd, nCmdShow);
+        HideTrayIcon(hWnd);
     }
     else {
-        SetTrayIcon(hWnd, true);
         ShowWindow(hWnd, SW_HIDE);
     }
     UpdateWindow(hWnd);
+
+    notifIconData.cbSize = sizeof(NOTIFYICONDATA);
+    notifIconData.hWnd = hWnd;
+    notifIconData.uID = 1;
+    notifIconData.uFlags = NIF_INFO;
+    notifIconData.dwInfoFlags = NIIF_INFO;
+    wcscpy_s(notifIconData.szInfoTitle, L"Paste blocked");
+    wcscpy_s(notifIconData.szInfo, L"Double paste prevented");
+    notifIconData.uTimeout = 500;
 
     return TRUE;
 }
@@ -230,7 +246,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
     case WM_SIZE:
         if (wParam == SIZE_MINIMIZED) {
-            SetTrayIcon(hWnd, true);
+            ShowTrayIcon(hWnd);
             ShowWindow(hWnd, SW_HIDE);
         }
         return 0;
@@ -239,8 +255,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             SetWindowPos(hWnd, HWND_TOP, x, y, w, h, SWP_SHOWWINDOW);
             ShowWindow(hWnd, SW_RESTORE);
             UpdateWindow(hWnd);
-            SetForegroundWindow(hWnd);  
-            SetTrayIcon(hWnd, false);
+            SetForegroundWindow(hWnd);
+            HideTrayIcon(hWnd);
             SendDlgItemMessageW(hDlg, IDC_CHECK1, BM_SETCHECK, (enabled ? BST_CHECKED : BST_UNCHECKED), 0);
         }
         else if (lParam == WM_RBUTTONUP) {
@@ -249,6 +265,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             AppendMenuW(hMenu, MF_ENABLED, IDM_EXIT_ITEM, L"Exit");
             POINT pt;
             GetCursorPos(&pt);
+            SetForegroundWindow(hWnd);
             BOOL cmd = TrackPopupMenu(hMenu, TPM_RIGHTALIGN | TPM_TOPALIGN | TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hWnd, NULL);
             if (cmd == IDM_EXIT_ITEM) {
                 UnhookWindowsHookEx(hHook);
@@ -259,6 +276,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 enabled = !enabled;
             }
             DestroyMenu(hMenu);
+            PostMessage(hWnd, WM_NULL, 0, 0);
         }
         return 0;
     default:
@@ -310,7 +328,10 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
         GlobalUnlock(rawData);
     }
     CloseClipboard();
-    if (currentTime - lastPasteTime < blockTimeInMS && matchPasted)  return 1;
+    if (currentTime - lastPasteTime < blockTimeInMS && matchPasted) {
+        if(notif) Shell_NotifyIconW(NIM_MODIFY, &notifIconData);
+        return 1;
+    }
     if (dataPtr != NULL) lastPasteTime = currentTime;
     if(!currentClip.empty()) pastedText = currentClip;
     return CallNextHookEx(hHook, nCode, wParam, lParam);
@@ -339,6 +360,7 @@ INT_PTR CALLBACK SettingsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
         if(enabled) SendDlgItemMessageW(hWnd, IDC_CHECK1, BM_SETCHECK, BST_CHECKED, 0);
         if(dialogOnStartup) SendDlgItemMessageW(hWnd, IDC_CHECK2, BM_SETCHECK, BST_CHECKED, 0);
         if(runOnStartup) SendDlgItemMessageW(hWnd, IDC_CHECK3, BM_SETCHECK, BST_CHECKED, 0);
+        if(notif) SendDlgItemMessageW(hWnd, IDC_CHECK4, BM_SETCHECK, BST_CHECKED, 0);
         SetDlgItemInt(hWnd, IDC_EDIT1, blockTimeInMS, false);
         SendDlgItemMessageW(hWnd, IDC_SLIDER1, TBM_SETPOS, TRUE, FindNearestValueIndex(blockTimeInMS));
         EnableWindow(hButton, FALSE);
@@ -360,10 +382,11 @@ INT_PTR CALLBACK SettingsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
         }else if (LOWORD(wParam) == IDC_BUTTON1 && HIWORD(wParam) == BN_CLICKED){
             HKEY hStartupKey;
             blockTimeInMS = GetDlgItemInt(hWnd, IDC_EDIT1, NULL, FALSE);
-            DWORD dEnabled = (enabled ? 1 : 0), dDialogOnStartup = (dialogOnStartup ? 1 : 0), dRunOnStartup = (runOnStartup ? 1 : 0);
+            DWORD dEnabled = (enabled ? 1 : 0), dDialogOnStartup = (dialogOnStartup ? 1 : 0), dRunOnStartup = (runOnStartup ? 1 : 0), dNotif = (notif ? 1 : 0);
             RegSetValueExW(hKey, ENABLED_REG_NAME, 0, REG_DWORD, (const BYTE*)(&dEnabled), sizeof(DWORD));
             RegSetValueExW(hKey, DIALOG_ON_STARTUP_REG_NAME, 0, REG_DWORD, (const BYTE*)(&dDialogOnStartup), sizeof(DWORD));
             RegSetValueExW(hKey, STARTUP_REG_NAME, 0, REG_DWORD, (const BYTE*)(&dRunOnStartup), sizeof(DWORD));
+            RegSetValueExW(hKey, NOTIF_REG_NAME, 0, REG_DWORD, (const BYTE*)(&dNotif), sizeof(DWORD));
             RegSetValueExW(hKey, BLOCK_TIME_REG_NAME, 0, REG_DWORD, (const BYTE*)(&blockTimeInMS), sizeof(DWORD));
             RegOpenKeyExW(HKEY_CURRENT_USER, STARTUP_DIR, 0, KEY_SET_VALUE, &hStartupKey);
             if (runOnStartup)
@@ -385,10 +408,13 @@ INT_PTR CALLBACK SettingsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
             runOnStartup = (IsDlgButtonChecked(hWnd, IDC_CHECK3) == BST_CHECKED);
             EnableWindow(hButton, TRUE);
         }
+        else if (LOWORD(wParam) == IDC_CHECK4 && HIWORD(wParam) == BN_CLICKED) {
+            notif = (IsDlgButtonChecked(hWnd, IDC_CHECK4) == BST_CHECKED);
+            EnableWindow(hButton, TRUE);
+        }
     }
     return FALSE;
 }
-
 void SetTrayIcon(HWND hWnd, bool add) {
     NOTIFYICONDATA nid = {};
     nid.cbSize = sizeof(NOTIFYICONDATA);
@@ -399,4 +425,24 @@ void SetTrayIcon(HWND hWnd, bool add) {
     nid.hIcon = LoadIcon(hInst, MAKEINTRESOURCE(IDI_DOUBLEPASTEPREVENTER));
     wcscpy_s(nid.szTip, szTitle);
     Shell_NotifyIcon(add ? NIM_ADD : NIM_DELETE, &nid);
+}
+void HideTrayIcon(HWND hWnd) {
+    NOTIFYICONDATA nid = {};
+    nid.cbSize = sizeof(NOTIFYICONDATA);
+    nid.hWnd = hWnd;
+    nid.uID = 1;
+    nid.uFlags = NIF_STATE;
+    nid.dwState = NIS_HIDDEN;
+    nid.dwStateMask = NIS_HIDDEN;
+    Shell_NotifyIcon(NIM_MODIFY, &nid);
+}
+void ShowTrayIcon(HWND hWnd) {
+    NOTIFYICONDATA nid = {};
+    nid.cbSize = sizeof(NOTIFYICONDATA);
+    nid.hWnd = hWnd;
+    nid.uID = 1;
+    nid.uFlags = NIF_STATE;
+    nid.dwState = 0;
+    nid.dwStateMask = NIS_HIDDEN;
+    Shell_NotifyIcon(NIM_MODIFY, &nid);
 }
