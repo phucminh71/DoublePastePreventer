@@ -9,7 +9,7 @@
 #include <string>
 
 #define WM_TRAYICON (WM_USER + 1)
-#define MAX_LOADSTRING 100
+#define MAX_LOADSTRING 30
 #define REG_DIR L"Software\\DoublePastePreventer"
 #define STARTUP_DIR L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
 #define ENABLED_REG_NAME L"Enabled"
@@ -20,6 +20,7 @@
 
 bool enabled = true, dialogOnStartup = false, runOnStartup = true, notif = false;
 UINT blockTimeInMS = 1000;
+
 constexpr unsigned int values[] = { 100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000};
 int x, y, w, h;
 
@@ -28,7 +29,6 @@ NOTIFYICONDATA notifIconData;
 HINSTANCE hInst;                                // current instance
 HHOOK hHook;
 HKEY hKey;
-HWND hButton;
 HWND hDlg = NULL;
 WCHAR szTitle[MAX_LOADSTRING];                  // The title bar text
 WCHAR szWindowClass[MAX_LOADSTRING];            // the main window class name
@@ -41,7 +41,7 @@ LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
 LRESULT CALLBACK    KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam);
 INT_PTR CALLBACK    SettingsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
-void                SetTrayIcon(HWND hWnd, bool add);
+void                SetTrayIcon(HWND hWnd);
 void                HideTrayIcon(HWND hWnd);
 void                ShowTrayIcon(HWND hWnd);
 
@@ -70,8 +70,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         return FALSE;
     }
 
-    HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_DOUBLEPASTEPREVENTER));
-
     MSG msg;
 
     // Main message loop:
@@ -79,11 +77,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     {
         if (hDlg && IsDialogMessage(hDlg, &msg))
             continue;
-        if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
-        {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-        }
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
     }
 
     return (int) msg.wParam;
@@ -173,7 +168,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
     hHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, hInstance, 0);
 
-    SetTrayIcon(hWnd, true);
+    SetTrayIcon(hWnd);
     if (dialogOnStartup) {
         SetWindowPos(hWnd, HWND_TOP, x, y, w, h, SWP_SHOWWINDOW);
         ShowWindow(hWnd, nCmdShow);
@@ -191,7 +186,6 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
     notifIconData.dwInfoFlags = NIIF_INFO;
     wcscpy_s(notifIconData.szInfoTitle, L"Paste blocked");
     wcscpy_s(notifIconData.szInfo, L"Double paste prevented");
-    notifIconData.uTimeout = 500;
 
     return TRUE;
 }
@@ -225,14 +219,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             default:
                 return DefWindowProc(hWnd, message, wParam, lParam);
             }
-        }
-        break;
-    case WM_PAINT:
-        {
-            PAINTSTRUCT ps;
-            BeginPaint(hWnd, &ps);
-            // TODO: Add any drawing code here...
-            EndPaint(hWnd, &ps);
         }
         break;
     case WM_DESTROY:
@@ -350,6 +336,7 @@ int FindNearestValueIndex(unsigned int target) {
 }
 INT_PTR CALLBACK SettingsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+    static HWND hButton;
     int index;
     switch (uMsg) {
     case WM_INITDIALOG:
@@ -415,7 +402,7 @@ INT_PTR CALLBACK SettingsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     }
     return FALSE;
 }
-void SetTrayIcon(HWND hWnd, bool add) {
+void SetTrayIcon(HWND hWnd) {
     NOTIFYICONDATA nid = {};
     nid.cbSize = sizeof(NOTIFYICONDATA);
     nid.hWnd = hWnd;
@@ -424,7 +411,7 @@ void SetTrayIcon(HWND hWnd, bool add) {
     nid.uCallbackMessage = WM_TRAYICON;
     nid.hIcon = LoadIcon(hInst, MAKEINTRESOURCE(IDI_DOUBLEPASTEPREVENTER));
     wcscpy_s(nid.szTip, szTitle);
-    Shell_NotifyIcon(add ? NIM_ADD : NIM_DELETE, &nid);
+    Shell_NotifyIcon(NIM_ADD, &nid);
 }
 void HideTrayIcon(HWND hWnd) {
     NOTIFYICONDATA nid = {};
