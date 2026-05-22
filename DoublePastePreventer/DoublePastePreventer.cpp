@@ -18,9 +18,6 @@
 #define NOTIF_REG_NAME L"Show notification when block"
 #define BLOCK_TIME_REG_NAME L"Block time"
 
-bool enabled = true, dialogOnStartup = false, runOnStartup = true, notif = false;
-UINT blockTimeInMS = 1000;
-
 constexpr unsigned int values[] = { 100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000};
 int x, y, w, h;
 
@@ -45,7 +42,10 @@ void                SetTrayIcon(HWND hWnd);
 void                HideTrayIcon(HWND hWnd);
 void                ShowTrayIcon(HWND hWnd);
 
-std::wstring pastedText;
+bool enabled = true, dialogOnStartup = false, runOnStartup = true, notif = false;
+UINT blockTimeInMS = 1000;
+
+DWORD lastSeq;
 ULONGLONG lastPasteTime = GetTickCount64();
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
@@ -296,30 +296,15 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
     if (nCode < 0 || wParam != WM_KEYDOWN || !enabled) return CallNextHookEx(hHook, nCode, wParam, lParam);
     bool vKeyDown = (reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam)->vkCode == 0x56), ctrlKeyDown = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
     if (!vKeyDown || !ctrlKeyDown) return CallNextHookEx(hHook, nCode, wParam, lParam);
-    if(!OpenClipboard(NULL)) return CallNextHookEx(hHook, nCode, wParam, lParam);
-    bool matchPasted = false;
-    std::wstring currentClip;
-    HANDLE rawData = GetClipboardData(CF_UNICODETEXT);
-    if (rawData == NULL) {
-        CloseClipboard();
-        return CallNextHookEx(hHook, nCode, wParam, lParam);
-    }
-    LPVOID dataPtr = GlobalLock(rawData);
+    DWORD currentSeq = GetClipboardSequenceNumber();
+    bool matchPasted = (currentSeq == lastSeq);
     ULONGLONG currentTime = GetTickCount64();
-    if (dataPtr != NULL) {
-        const wchar_t* raw = static_cast<const wchar_t*>(dataPtr);
-        matchPasted = (wcscmp(pastedText.c_str(), raw) == 0);
-        if (!matchPasted || currentTime - lastPasteTime >= blockTimeInMS)
-            currentClip = raw;
-        GlobalUnlock(rawData);
-    }
-    CloseClipboard();
     if (currentTime - lastPasteTime < blockTimeInMS && matchPasted) {
         if(notif) Shell_NotifyIconW(NIM_MODIFY, &notifIconData);
         return 1;
     }
-    if (dataPtr != NULL) lastPasteTime = currentTime;
-    if(!currentClip.empty()) pastedText = currentClip;
+    lastPasteTime = currentTime;
+    lastSeq = currentSeq;
     return CallNextHookEx(hHook, nCode, wParam, lParam);
 }
 int FindNearestValueIndex(unsigned int target) {
