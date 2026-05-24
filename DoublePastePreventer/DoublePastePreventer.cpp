@@ -17,6 +17,7 @@
 #define STARTUP_REG_NAME L"Run on startup"
 #define NOTIF_REG_NAME L"Show notification when block"
 #define BLOCK_TIME_REG_NAME L"Block time"
+#define SMART_REG_NAME L"Smart blocking"
 
 constexpr unsigned int values[] = { 100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000};
 int x, y, w, h;
@@ -42,11 +43,12 @@ void                SetTrayIcon(HWND hWnd);
 void                HideTrayIcon(HWND hWnd);
 void                ShowTrayIcon(HWND hWnd);
 
-bool enabled = true, dialogOnStartup = false, runOnStartup = true, notif = false;
+bool enabled = true, dialogOnStartup = false, runOnStartup = true, notif = false, smartBlocking = false;
 UINT blockTimeInMS = 1000;
 
-DWORD lastSeq;
+DWORD lastSeq = GetClipboardSequenceNumber();
 ULONGLONG lastPasteTime = GetTickCount64();
+int pasteAttempts = 0;
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                      _In_opt_ HINSTANCE hPrevInstance,
@@ -140,15 +142,17 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
     DWORD size = sizeof(DWORD);
     RegGetValueW(HKEY_CURRENT_USER, REG_DIR, BLOCK_TIME_REG_NAME, RRF_RT_REG_DWORD, NULL, &blockTimeInMS, &size);
-    DWORD dEnabled = 1, dDialogOnStartup = 0, dRunOnStartup = 1, dNotif = 1;
+    DWORD dEnabled = 1, dDialogOnStartup = 0, dRunOnStartup = 1, dNotif = 0, dSmart = 0;
     RegGetValueW(HKEY_CURRENT_USER, REG_DIR, ENABLED_REG_NAME, RRF_RT_REG_DWORD, NULL, &dEnabled, &size);
     RegGetValueW(HKEY_CURRENT_USER, REG_DIR, DIALOG_ON_STARTUP_REG_NAME, RRF_RT_REG_DWORD, NULL, &dDialogOnStartup, &size);
     RegGetValueW(HKEY_CURRENT_USER, REG_DIR, STARTUP_REG_NAME, RRF_RT_REG_DWORD, NULL, &dRunOnStartup, &size);
     RegGetValueW(HKEY_CURRENT_USER, REG_DIR, NOTIF_REG_NAME, RRF_RT_REG_DWORD, NULL, &dNotif, &size);
-    enabled = (bool)(dEnabled != 0);
-    dialogOnStartup = (bool)(dDialogOnStartup != 0);
-    runOnStartup = (bool)(dRunOnStartup != 0);
-    notif = (bool)(dNotif != 0);
+    RegGetValueW(HKEY_CURRENT_USER, REG_DIR, SMART_REG_NAME, RRF_RT_REG_DWORD, NULL, &dSmart, &size);
+    enabled = (dEnabled != 0);
+    dialogOnStartup = (dDialogOnStartup != 0);
+    runOnStartup = (dRunOnStartup != 0);
+    notif = (dNotif != 0);
+    smartBlocking = (dSmart != 0);
 
     hDlg = CreateDialogW(hInst, MAKEINTRESOURCEW(IDD_FORMVIEW), hWnd, SettingsProc);
 
@@ -296,18 +300,21 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
     if (nCode < 0 || wParam != WM_KEYDOWN || !enabled) return CallNextHookEx(hHook, nCode, wParam, lParam);
     bool vKeyDown = (reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam)->vkCode == 0x56), ctrlKeyDown = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
     if (!vKeyDown || !ctrlKeyDown) return CallNextHookEx(hHook, nCode, wParam, lParam);
+    ULONGLONG currentTime = GetTickCount64();
     DWORD currentSeq = GetClipboardSequenceNumber();
     bool matchPasted = (currentSeq == lastSeq);
-    ULONGLONG currentTime = GetTickCount64();
-    if (currentTime - lastPasteTime < blockTimeInMS && matchPasted) {
-        if(notif) Shell_NotifyIconW(NIM_MODIFY, &notifIconData);
+    bool withinWindow = (currentTime - lastPasteTime < blockTimeInMS);
+    if ((!matchPasted || !withinWindow) && smartBlocking) pasteAttempts = 0;
+    if (smartBlocking) pasteAttempts++;
+    if (withinWindow && matchPasted && (pasteAttempts == 2 || !smartBlocking)) {
+        if (notif) Shell_NotifyIconW(NIM_MODIFY, &notifIconData);
         return 1;
     }
     lastPasteTime = currentTime;
     lastSeq = currentSeq;
     return CallNextHookEx(hHook, nCode, wParam, lParam);
 }
-int FindNearestValueIndex(unsigned int target) {
+static int FindNearestValueIndex(unsigned int target) {
     int lo = 0, hi = sizeof(values) / sizeof(values[0]) - 1;
     while (lo < hi) {
         int mid = (lo + hi) / 2;
@@ -333,6 +340,7 @@ INT_PTR CALLBACK SettingsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
         if(dialogOnStartup) SendDlgItemMessageW(hWnd, IDC_CHECK2, BM_SETCHECK, BST_CHECKED, 0);
         if(runOnStartup) SendDlgItemMessageW(hWnd, IDC_CHECK3, BM_SETCHECK, BST_CHECKED, 0);
         if(notif) SendDlgItemMessageW(hWnd, IDC_CHECK4, BM_SETCHECK, BST_CHECKED, 0);
+        if(smartBlocking) SendDlgItemMessageW(hWnd, IDC_CHECK5, BM_SETCHECK, BST_CHECKED, 0);
         SetDlgItemInt(hWnd, IDC_EDIT1, blockTimeInMS, false);
         SendDlgItemMessageW(hWnd, IDC_SLIDER1, TBM_SETPOS, TRUE, FindNearestValueIndex(blockTimeInMS));
         EnableWindow(hButton, FALSE);
@@ -354,11 +362,13 @@ INT_PTR CALLBACK SettingsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
         }else if (LOWORD(wParam) == IDC_BUTTON1 && HIWORD(wParam) == BN_CLICKED){
             HKEY hStartupKey;
             blockTimeInMS = GetDlgItemInt(hWnd, IDC_EDIT1, NULL, FALSE);
-            DWORD dEnabled = (enabled ? 1 : 0), dDialogOnStartup = (dialogOnStartup ? 1 : 0), dRunOnStartup = (runOnStartup ? 1 : 0), dNotif = (notif ? 1 : 0);
+            DWORD dEnabled = (enabled ? 1 : 0), dDialogOnStartup = (dialogOnStartup ? 1 : 0), dRunOnStartup = (runOnStartup ? 1 : 0), 
+                dNotif = (notif ? 1 : 0), dSmart = (smartBlocking ? 1 : 0);
             RegSetValueExW(hKey, ENABLED_REG_NAME, 0, REG_DWORD, (const BYTE*)(&dEnabled), sizeof(DWORD));
             RegSetValueExW(hKey, DIALOG_ON_STARTUP_REG_NAME, 0, REG_DWORD, (const BYTE*)(&dDialogOnStartup), sizeof(DWORD));
             RegSetValueExW(hKey, STARTUP_REG_NAME, 0, REG_DWORD, (const BYTE*)(&dRunOnStartup), sizeof(DWORD));
             RegSetValueExW(hKey, NOTIF_REG_NAME, 0, REG_DWORD, (const BYTE*)(&dNotif), sizeof(DWORD));
+            RegSetValueExW(hKey, SMART_REG_NAME, 0, REG_DWORD, (const BYTE*)(&dSmart), sizeof(DWORD));
             RegSetValueExW(hKey, BLOCK_TIME_REG_NAME, 0, REG_DWORD, (const BYTE*)(&blockTimeInMS), sizeof(DWORD));
             RegOpenKeyExW(HKEY_CURRENT_USER, STARTUP_DIR, 0, KEY_SET_VALUE, &hStartupKey);
             if (runOnStartup)
@@ -382,6 +392,11 @@ INT_PTR CALLBACK SettingsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
         }
         else if (LOWORD(wParam) == IDC_CHECK4 && HIWORD(wParam) == BN_CLICKED) {
             notif = (IsDlgButtonChecked(hWnd, IDC_CHECK4) == BST_CHECKED);
+            EnableWindow(hButton, TRUE);
+        }
+        else if (LOWORD(wParam) == IDC_CHECK5 && HIWORD(wParam) == BN_CLICKED) {
+            smartBlocking = (IsDlgButtonChecked(hWnd, IDC_CHECK5) == BST_CHECKED);
+            pasteAttempts = 0;
             EnableWindow(hButton, TRUE);
         }
     }
